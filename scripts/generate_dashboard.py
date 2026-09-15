@@ -601,7 +601,7 @@ def render_markdown(stats):
         "# FLoRA-Notify experiment dashboard",
         f"*Updated {now} · [Source code](https://github.com/forrtproject/flora_preprint_notifier)*",
         "",
-        f"> **{sent:,} archive-verified notifications sent** · **{recipients:,} recipient deliveries** "
+        f"> **{sent:,} archive-verified assigned-preprint records** · **{recipients:,} recorded recipient deliveries** "
         f"to **{unique_recipients:,} distinct addresses**  ",
         f"> **{targets['unique_originals']:,} distinct targeted originals recorded** · "
         f"{email['pending']:,} queued · {stats['email_error_open']:,} open send errors",
@@ -636,7 +636,7 @@ def render_markdown(stats):
             "They are excluded from verified delivery totals pending correction.",
         ])
 
-    lines.extend(["", "## Emails over time", ""])
+    lines.extend(["", "## Canonical notification records over time", ""])
     if activity["week_starts"]:
         first_week = activity["week_starts"][0].strftime("%d %b %Y")
         last_week = activity["week_starts"][-1].strftime("%d %b %Y")
@@ -671,7 +671,7 @@ def render_markdown(stats):
         "",
         "## Most frequently targeted originals",
         "",
-        f"Recorded from the sent-email snapshot for **{targets['notifications_with_targets']:,} of {sent:,}** notifications: "
+        f"Recorded from the sent-email snapshot for **{targets['notifications_with_targets']:,} of {sent:,}** canonical records: "
         f"**{targets['original_mentions']:,} original-study mentions**, "
         f"**{targets['unique_originals']:,} unique originals**, and "
         f"**{targets['multi_original_notifications']:,} notifications with multiple originals**.",
