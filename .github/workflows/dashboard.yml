@@ -15,6 +15,7 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       DDB_TABLE_PREPRINTS: prod_preprints
+      DDB_TABLE_REFERENCES: prod_preprint_references
       DDB_TABLE_EXCLUDED_PREPRINTS: prod_excluded_preprints
       DDB_TABLE_TRIAL_ASSIGNMENTS: prod_trial_preprint_assignments
       DDB_TABLE_EMAIL_SUPPRESSION: prod_email_suppression
