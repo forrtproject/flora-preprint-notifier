@@ -237,6 +237,7 @@ def process_email_batch(
                 pid,
                 recipient=", ".join(valid_addresses),
                 message_id=message_id,
+                originals=context.get("originals") or [],
                 owner=claim_owner,
             )
             if not marked:

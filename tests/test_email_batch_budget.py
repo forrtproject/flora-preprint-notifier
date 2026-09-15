@@ -35,9 +35,23 @@ class EmailBatchBudgetTests(unittest.TestCase):
         mock_limiter_cls.return_value = limiter
 
         contexts = {
-            "p1": {"_recipients": [{"email": "a1@uni.edu", "first_name": "Alice"}], "author_greeting": "Dear Alice,"},
-            "p2": {"_recipients": [{"email": "b1@uni.edu", "first_name": "Bob"}, {"email": "b2@uni.edu", "first_name": "Beth"}], "author_greeting": "Dear Bob, dear Beth,"},
-            "p3": {"_recipients": [{"email": "c1@uni.edu", "first_name": "Carol"}], "author_greeting": "Dear Carol,"},
+            "p1": {
+                "_recipients": [{"email": "a1@uni.edu", "first_name": "Alice"}],
+                "author_greeting": "Dear Alice,",
+                "originals": [{"doi": "10.1/a"}],
+            },
+            "p2": {
+                "_recipients": [
+                    {"email": "b1@uni.edu", "first_name": "Bob"},
+                    {"email": "b2@uni.edu", "first_name": "Beth"},
+                ],
+                "author_greeting": "Dear Bob, dear Beth,",
+            },
+            "p3": {
+                "_recipients": [{"email": "c1@uni.edu", "first_name": "Carol"}],
+                "author_greeting": "Dear Carol,",
+                "originals": [{"doi": "10.1/c"}],
+            },
         }
         mock_assemble.side_effect = lambda pid, repo=None: contexts.get(pid)
 
@@ -50,8 +64,20 @@ class EmailBatchBudgetTests(unittest.TestCase):
 
         repo.mark_email_sent.assert_has_calls(
             [
-                call("p1", recipient="a1@uni.edu", message_id="msg-1", owner=ANY),
-                call("p3", recipient="c1@uni.edu", message_id="msg-1", owner=ANY),
+                call(
+                    "p1",
+                    recipient="a1@uni.edu",
+                    message_id="msg-1",
+                    originals=[{"doi": "10.1/a"}],
+                    owner=ANY,
+                ),
+                call(
+                    "p3",
+                    recipient="c1@uni.edu",
+                    message_id="msg-1",
+                    originals=[{"doi": "10.1/c"}],
+                    owner=ANY,
+                ),
             ]
         )
         sent_ids = [c.args[0] for c in repo.mark_email_sent.call_args_list]

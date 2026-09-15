@@ -12,7 +12,6 @@ local DynamoDB endpoint (DYNAMO_LOCAL_URL).
 import os
 import sys
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from urllib.parse import quote
@@ -53,7 +52,7 @@ def _count_by_gsi(table, index_name, key_name, key_value):
     while resp.get("LastEvaluatedKey"):
         resp = table.query(
             IndexName=index_name,
-            KeyConditionExpression=boto3.dynamodb.conditions.Key(key_name).eq(key_value),
+            KeyConditionExpression=Key(key_name).eq(key_value),
             Select="COUNT",
             ExclusiveStartKey=resp["LastEvaluatedKey"],
         )
@@ -130,29 +129,6 @@ def _scan_with_filter(table, filter_expression, projection_expression):
         )
         items.extend(resp["Items"])
     return items
-
-
-def _query_targeted_references(table, osf_id):
-    """Return references that would have appeared in a sent notification."""
-    items = []
-    kwargs = {
-        "KeyConditionExpression": Key("osf_id").eq(osf_id),
-        "ProjectionExpression": (
-            "doi, raw_citation, flora_ref_pairs, flora_replication_cited, "
-            "citation_validation_status"
-        ),
-    }
-    while True:
-        resp = table.query(**kwargs)
-        items.extend(
-            item for item in resp.get("Items", [])
-            if item.get("flora_replication_cited") is False
-            and item.get("flora_ref_pairs")
-            and item.get("citation_validation_status") != "rejected"
-        )
-        if not resp.get("LastEvaluatedKey"):
-            return items
-        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
 
 # ---------------------------------------------------------------------------
@@ -309,45 +285,43 @@ def _normalize_doi(value):
     return text.rstrip(".,; ")
 
 
-def _summarize_targeted_originals(sent_items, references_table):
-    """Count originals included in sent notifications, one count per notification."""
-    sent_ids = [str(item.get("osf_id") or "").strip() for item in sent_items]
-    sent_ids = [osf_id for osf_id in sent_ids if osf_id]
-    workers = max(1, min(int(os.getenv("DASHBOARD_REFERENCE_WORKERS", "12")), 32))
-
-    def fetch(osf_id):
-        return osf_id, _query_targeted_references(references_table, osf_id)
-
+def _summarize_targeted_originals(sent_items):
+    """Count immutable original-study snapshots stored when each email was sent."""
     counts = {}
     notifications_with_targets = 0
     multi_original_notifications = 0
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        results = executor.map(fetch, sent_ids)
-        for _osf_id, refs in results:
-            seen_in_notification = set()
-            for ref in refs:
-                doi = _normalize_doi(ref.get("doi"))
-                citation = " ".join(str(ref.get("raw_citation") or "").split())
-                key = doi or citation.casefold()
-                if not key:
-                    continue
-                entry = counts.setdefault(key, {
-                    "doi": doi,
-                    "citation": citation or doi or "Unknown original",
-                    "notifications": 0,
-                    "replication_dois": set(),
-                })
-                if key not in seen_in_notification:
-                    seen_in_notification.add(key)
-                    entry["notifications"] += 1
-                for pair in ref.get("flora_ref_pairs") or []:
-                    replication_doi = _normalize_doi((pair or {}).get("doi_r"))
-                    if replication_doi:
-                        entry["replication_dois"].add(replication_doi)
-            if seen_in_notification:
-                notifications_with_targets += 1
-            if len(seen_in_notification) > 1:
-                multi_original_notifications += 1
+    for item in sent_items:
+        seen_in_notification = set()
+        for original in item.get("email_originals") or []:
+            doi = _normalize_doi(original.get("doi"))
+            citation = " ".join(str(
+                original.get("full_reference")
+                or original.get("citation")
+                or ""
+            ).split())
+            key = doi or citation.casefold()
+            if not key:
+                continue
+            entry = counts.setdefault(key, {
+                "doi": doi,
+                "citation": citation or doi or "Unknown original",
+                "notifications": 0,
+                "replication_dois": set(),
+            })
+            if key not in seen_in_notification:
+                seen_in_notification.add(key)
+                entry["notifications"] += 1
+            for replication in original.get("replications") or []:
+                replication_doi = _normalize_doi(
+                    (replication or {}).get("doi")
+                    or (replication or {}).get("doi_r")
+                )
+                if replication_doi:
+                    entry["replication_dois"].add(replication_doi)
+        if seen_in_notification:
+            notifications_with_targets += 1
+        if len(seen_in_notification) > 1:
+            multi_original_notifications += 1
 
     originals = sorted(
         counts.values(),
@@ -375,13 +349,11 @@ def collect_stats():
     excluded_name = os.environ.get("DDB_TABLE_EXCLUDED_PREPRINTS", "excluded_preprints")
     assignments_name = os.environ.get("DDB_TABLE_TRIAL_ASSIGNMENTS", "trial_preprint_assignments")
     suppression_name = os.environ.get("DDB_TABLE_EMAIL_SUPPRESSION", "email_suppression")
-    references_name = os.environ.get("DDB_TABLE_REFERENCES", "preprint_references")
 
     preprints = ddb.Table(preprints_name)
     excluded = ddb.Table(excluded_name)
     assignments = ddb.Table(assignments_name)
     suppression = ddb.Table(suppression_name)
-    references = ddb.Table(references_name)
 
     # Pipeline funnel — 8 GSI count queries
     queues = ["queue_pdf", "queue_grobid", "queue_extract", "queue_email"]
@@ -417,18 +389,19 @@ def collect_stats():
         Attr("email_error").exists(),
     )
 
-    # Sent-notification records provide the experiment timeline. Targeted
-    # originals are reconstructed from the eligible references on the emailed
-    # preprints, rather than from all currently eligible preprints.
-    sent_items = _query_all_items(
+    # Sent-notification records provide the experiment timeline and immutable
+    # snapshots of the original studies included in each email.
+    database_sent_items = _query_all_items(
         preprints,
         "by_queue_email",
         "queue_email",
         "done",
-        "osf_id, email_sent_at, email_recipient, provider_id",
+        "osf_id, email_sent_at, email_recipient, provider_id, email_originals",
     )
+    sent_items = [item for item in database_sent_items if item.get("email_originals")]
+    email_snapshot_missing = len(database_sent_items) - len(sent_items)
     email_activity = _summarize_email_activity(sent_items)
-    targeted_originals = _summarize_targeted_originals(sent_items, references)
+    targeted_originals = _summarize_targeted_originals(sent_items)
     sent_addresses = email_activity["recipient_addresses"]
     experiment_suppression_counts = Counter(
         item.get("reason", "unknown")
@@ -469,26 +442,31 @@ def collect_stats():
     flora_multi_ref = sum(1 for c in eligible_counts if c > 1)
     flora_multi_ref_pct = (flora_multi_ref / flora_total * 100) if flora_total else 0
 
-    # Preprints with citation validation pending (refs needing confirmation)
-    flora_validation_pending = sum(
-        1 for item in flora_eligible_items
-        if item.get("flora_citation_validation_pending") is True
-    )
+    # Make the current FLoRA-matched population mutually exclusive so its
+    # categories reconcile exactly to flora_total.
+    flora_current = Counter()
+    for item in flora_eligible_items:
+        if item.get("excluded") is True:
+            flora_current["excluded"] += 1
+        elif not item.get("author_email_candidates"):
+            flora_current["missing_email"] += 1
+        elif item.get("flora_citation_validation_pending") is True:
+            flora_current["validation_pending"] += 1
+        else:
+            flora_current["assignable"] += 1
 
-    # Preprints missing author emails
-    flora_missing_email = sum(
-        1 for item in flora_eligible_items
-        if not item.get("author_email_candidates")
-    )
-
-    # Total assignable: flora_eligible, has email, no pending validation (regardless
-    # of assignment status — the effective sample size)
-    flora_total_assignable = sum(
+    flora_excluded = flora_current["excluded"]
+    flora_missing_email = flora_current["missing_email"]
+    flora_validation_pending = flora_current["validation_pending"]
+    flora_total_assignable = flora_current["assignable"]
+    flora_currently_assigned = sum(
         1 for item in flora_eligible_items
         if not item.get("excluded")
         and item.get("author_email_candidates")
         and not item.get("flora_citation_validation_pending")
+        and item.get("trial_assignment_status") == "assigned"
     )
+    assigned_not_currently_assignable = max(0, total_assigned - flora_currently_assigned)
 
     # Assignment pending: assignable but not yet assigned
     flora_assignment_pending = sum(
@@ -540,13 +518,18 @@ def collect_stats():
         "flora_multi_ref": flora_multi_ref,
         "flora_multi_ref_pct": flora_multi_ref_pct,
         "flora_validation_pending": flora_validation_pending,
+        "flora_excluded": flora_excluded,
         "flora_missing_email": flora_missing_email,
         "flora_total_assignable": flora_total_assignable,
+        "flora_currently_assigned": flora_currently_assigned,
+        "assigned_not_currently_assignable": assigned_not_currently_assignable,
         "flora_assignment_pending": flora_assignment_pending,
         "email_activity": email_activity,
         "targeted_originals": targeted_originals,
         "contactable_by_arm": contactable_by_arm,
         "experiment_suppression_counts": experiment_suppression_counts,
+        "database_sent_count": len(database_sent_items),
+        "email_snapshot_missing": email_snapshot_missing,
     }
 
 
@@ -604,7 +587,7 @@ def render_markdown(stats):
     unique_recipients = activity["unique_recipients"]
     treatment = stats["treatment_assigned"]
     control = stats["arm_counts"].get("control", 0)
-    email_in_queue = email["pending"] + email["done"]
+    email_in_queue = email["pending"] + sent
     missing_from_queue = max(0, treatment - email_in_queue)
     treatment_contactable = stats["contactable_by_arm"].get("treatment", 0)
     control_contactable = stats["contactable_by_arm"].get("control", 0)
@@ -618,9 +601,9 @@ def render_markdown(stats):
         "# FLoRA-Notify experiment dashboard",
         f"*Updated {now} · [Source code](https://github.com/forrtproject/flora_preprint_notifier)*",
         "",
-        f"> **{sent:,} notifications sent** · **{recipients:,} recipient deliveries** "
+        f"> **{sent:,} archive-verified notifications sent** · **{recipients:,} recipient deliveries** "
         f"to **{unique_recipients:,} distinct addresses**  ",
-        f"> **{targets['unique_originals']:,} distinct targeted originals traced** · "
+        f"> **{targets['unique_originals']:,} distinct targeted originals recorded** · "
         f"{email['pending']:,} queued · {stats['email_error_open']:,} open send errors",
         "",
         "## Experiment at a glance",
@@ -640,7 +623,17 @@ def render_markdown(stats):
             "",
             "> [!WARNING]  ",
             f"> **{missing_from_queue} treatment preprint{' is' if missing_from_queue == 1 else 's are'} "
-            "not in the email queue.** Run `scripts/backfill_queue_email.py`.",
+            "neither archive-verified as sent nor pending in the email queue.** "
+            "Review sent-state anomalies before re-queuing.",
+        ])
+
+    if stats["email_snapshot_missing"]:
+        lines.extend([
+            "",
+            "> [!CAUTION]  ",
+            f"> **{stats['email_snapshot_missing']:,} record{' is' if stats['email_snapshot_missing'] == 1 else 's are'} "
+            "marked sent in DynamoDB but have no matching Gmail message.** "
+            "They are excluded from verified delivery totals pending correction.",
         ])
 
     lines.extend(["", "## Emails over time", ""])
@@ -678,7 +671,7 @@ def render_markdown(stats):
         "",
         "## Most frequently targeted originals",
         "",
-        f"Reconstructed for **{targets['notifications_with_targets']:,} of {sent:,}** sent notifications: "
+        f"Recorded from the sent-email snapshot for **{targets['notifications_with_targets']:,} of {sent:,}** notifications: "
         f"**{targets['original_mentions']:,} original-study mentions**, "
         f"**{targets['unique_originals']:,} unique originals**, and "
         f"**{targets['multi_original_notifications']:,} notifications with multiple originals**.",
@@ -703,6 +696,15 @@ def render_markdown(stats):
     else:
         lines.append("No targeted original-study records found for sent notifications.")
 
+    if targets["notifications_with_targets"] != sent:
+        missing_snapshots = sent - targets["notifications_with_targets"]
+        lines.extend([
+            "",
+            "> [!WARNING]  ",
+            f"> **{missing_snapshots:,} sent notification{' has' if missing_snapshots == 1 else 's have'} "
+            "no immutable original-study snapshot.** This is a data-integrity gap, not a zero-target email.",
+        ])
+
     lines.extend([
         "",
         "## Delivery mix and health",
@@ -722,6 +724,7 @@ def render_markdown(stats):
         f"| Unsubscribes among recipients | {stats['experiment_suppression_counts'].get('unsubscribe', 0):,} | "
         f"{_pct(stats['experiment_suppression_counts'].get('unsubscribe', 0), unique_recipients)} |",
         f"| Open send errors | {stats['email_error_open']:,} | — |",
+        f"| Database sent-state anomalies | {stats['email_snapshot_missing']:,} | — |",
         f"| All suppressions on file | {stats['total_suppressed']:,} | — |",
         "",
         "---",
@@ -763,28 +766,36 @@ def render_markdown(stats):
         s = stats["funnel"][q]
         lines.append(f"| {STAGE_LABELS[q]} | {s['pending']:,} | {s['done']:,} | {s['total']:,} |")
 
-    # FLoRA matching
+    # FLoRA matching and assignment reconciliation
     lines.extend([
         "",
-        "### FLoRA matching",
+        "### Current FLoRA-match accounting",
         "",
-        "| Metric | Value |",
-        "|--------|-------|",
-        f"| Screened against FLoRA | {stats['flora_screened']:,} / {stats['funnel']['flora_screening']['total']:,} |",
-        f"| Email extraction completed | {stats['email_extracted']:,} / {stats['funnel']['author_extraction']['total']:,} |",
-        f"| Preprints with FLoRA matches | {stats['flora_total']:,} |",
-        f"| Pending citation confirmation | {stats['flora_validation_pending']:,} |",
-        f"| Missing author emails | {stats['flora_missing_email']:,} |",
+        "These categories are mutually exclusive and sum to the current match total.",
         "",
-        "**Matched reference distribution:**",
+        "| Current state | Count |",
+        "|---|---:|",
+        f"| Records with a FLoRA match | **{stats['flora_total']:,}** |",
+        f"| − Excluded from the active pipeline | {stats['flora_excluded']:,} |",
+        f"| − Active without a contactable author | {stats['flora_missing_email']:,} |",
+        f"| − Active, pending citation confirmation | {stats['flora_validation_pending']:,} |",
+        f"| = Currently assignable | **{stats['flora_total_assignable']:,}** |",
+        "",
+        f"**Historical assignments:** {stats['total_assigned']:,} = "
+        f"{stats['flora_currently_assigned']:,} still currently assignable + "
+        f"{stats['assigned_not_currently_assignable']:,} no longer currently assignable.  ",
+        f"> **Decision-review cohort: {stats['assigned_not_currently_assignable']:,}.** "
+        f"This is historical cohort drift and is distinct from the {stats['flora_excluded']:,} "
+        "current matched exclusions above; the two populations can overlap and should not be added or subtracted.",
+        "",
+        f"**Currently assignable but awaiting assignment:** {stats['flora_assignment_pending']:,}.  ",
+        f"**Excluded during randomisation:** {stats['randomization_excluded']:,}.",
+        "",
+        "**Current matched-reference distribution:**",
         f" Median: {stats['flora_median_refs']}, "
         f"Max: {stats['flora_max_refs']:,}, "
         f">1 match: {stats['flora_multi_ref']:,}/{stats['flora_total']:,}"
         f" ({stats['flora_multi_ref_pct']:.0f}%)",
-        "",
-        f"**Total assignable (eligible, has email, no pending validation):** "
-        f"{stats['flora_total_assignable']:,}  ",
-        f"**Assignment pending:** {stats['flora_assignment_pending']:,}",
     ])
 
     lines.append("")

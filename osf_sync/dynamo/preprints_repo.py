@@ -1657,6 +1657,7 @@ class PreprintsRepo:
         *,
         recipient: str,
         message_id: str,
+        originals: Optional[List[Dict[str, Any]]] = None,
         owner: Optional[str] = None,
     ) -> bool:
         now = dt.datetime.utcnow().isoformat()
@@ -1667,12 +1668,22 @@ class PreprintsRepo:
             ":mid": message_id,
             ":done": "done",
         }
+        set_exprs = [
+            "email_sent=:true",
+            "email_sent_at=:t",
+            "email_recipient=:r",
+            "email_message_id=:mid",
+            "updated_at=:t",
+            "queue_email=:done",
+        ]
+        if originals is not None:
+            set_exprs.append("email_originals=:originals")
+            expr_values[":originals"] = originals
+
         kwargs: Dict[str, Any] = {
             "Key": {"osf_id": osf_id},
             "UpdateExpression": (
-                "SET email_sent=:true, email_sent_at=:t, "
-                "email_recipient=:r, email_message_id=:mid, updated_at=:t, "
-                "queue_email=:done "
+                "SET " + ", ".join(set_exprs) + " "
                 "REMOVE email_error, claim_email_owner, claim_email_until"
             ),
             "ExpressionAttributeValues": expr_values,
