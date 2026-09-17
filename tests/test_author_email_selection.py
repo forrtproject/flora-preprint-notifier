@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from osf_sync.extraction.extract_author_list import (
+    _can_exclude_for_no_author_contacts,
     _assign_orcid_from_pdf,
     _assign_orcid_by_name,
     _assign_pdf_emails,
@@ -13,6 +14,13 @@ from osf_sync.extraction.extract_author_list import (
 
 
 class AuthorEmailSelectionTests(unittest.TestCase):
+    def test_no_contact_exclusion_is_limited_to_unassigned_records(self) -> None:
+        self.assertTrue(_can_exclude_for_no_author_contacts({}))
+        self.assertFalse(
+            _can_exclude_for_no_author_contacts({"trial_assignment_status": "assigned"})
+        )
+        self.assertFalse(_can_exclude_for_no_author_contacts({"email_sent": True}))
+
     @patch("osf_sync.extraction.extract_author_list.is_suppressed")
     @patch("osf_sync.extraction.extract_author_list.validate_recipient")
     def test_selection_enforces_validation_and_suppression(self, mock_validate, mock_suppressed) -> None:

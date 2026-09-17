@@ -95,6 +95,7 @@ def _reason_label(reason: str) -> str:
         "cross_arm_author_overlap": "Cross-arm author overlap",
         "non_real_match_post_validation": "Match rejected after validation",
         "self_replication_email_deviation": "Self-replication deviation",
+        "unverifiable_historical_flora_assignment": "Unverifiable historical match",
     }
     return labels.get(reason, reason.replace("_", " ").capitalize())
 
@@ -106,6 +107,8 @@ def _current_state(item: Mapping[str, Any] | None) -> str:
         return "Now excluded"
     if item.get("flora_eligible") is not True:
         return "No longer FLoRA-eligible"
+    if item.get("manual_review_hold") is True:
+        return "Manual review hold"
     if not item.get("author_email_candidates"):
         return "No contactable author"
     if item.get("flora_citation_validation_pending") is True:
@@ -122,6 +125,8 @@ def _decision_guidance(record: Mapping[str, Any]) -> tuple[str, str]:
         return "Urgent", "Restore or account for the missing source record before analysis."
     if state == "Citation validation pending":
         return "Resolve", "Complete citation validation, then confirm eligibility and cohort status."
+    if state == "Manual review hold":
+        return "Resolve", "Verify the restored source record, author contacts, and match before releasing the email hold."
     if state == "Now excluded" and record.get("email_archive_verified"):
         return "Adjudicate", "Decide analysis handling for a post-assignment exclusion after a verified email."
     if state == "Now excluded":
@@ -149,7 +154,8 @@ def collect_audit() -> Dict[str, Any]:
             "osf_id, title, provider_id, date_created, date_published, flora_eligible, "
             "flora_eligible_count, author_email_candidates, trial_assignment_status, "
             "trial_arm, trial_assigned_at, email_sent, email_sent_at, email_originals, "
-            "email_archive_audit_status, excluded, excluded_at, excluded_reason, links"
+            "email_archive_audit_status, excluded, excluded_at, excluded_reason, links, "
+            "flora_citation_validation_pending, manual_review_hold"
         ),
     )
     matched_excluded = [item for item in current_matches if item.get("excluded") is True]
@@ -157,6 +163,8 @@ def collect_audit() -> Dict[str, Any]:
     for item in current_matches:
         if item.get("excluded") is True:
             current_match_states["excluded"] += 1
+        elif item.get("manual_review_hold") is True:
+            current_match_states["manual_review_hold"] += 1
         elif not item.get("author_email_candidates"):
             current_match_states["missing_email"] += 1
         elif item.get("flora_citation_validation_pending") is True:
@@ -182,7 +190,7 @@ def collect_audit() -> Dict[str, Any]:
             "osf_id, title, provider_id, flora_eligible, excluded, excluded_reason, "
             "excluded_at, email_sent_at, "
             "author_email_candidates, flora_citation_validation_pending, email_sent, "
-            "email_originals, email_archive_audit_status, links"
+            "email_originals, email_archive_audit_status, links, manual_review_hold"
         ),
     )
 
@@ -414,7 +422,7 @@ p{{max-width:76ch}} .meta{{color:var(--muted);font-size:.88rem}} .lede{{font-fam
 .verdict{{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin:30px 0}}
 .verdict>div{{background:white;padding:22px}} .verdict strong{{display:block;font:700 2.35rem/1 Charter,Georgia,serif;margin-bottom:7px}} .verdict .primary{{background:var(--blue);color:white}}
 .reconcile{{display:flex;height:62px;border-radius:4px;overflow:hidden;margin:22px 0 10px;color:white;font-weight:700}} .reconcile span{{display:flex;align-items:center;justify-content:center;min-width:2px}}
-.assignable{{background:var(--green)}} .excluded{{background:var(--blue)}} .pending{{background:var(--amber)}} .legend{{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:.9rem}} .dot{{width:10px;height:10px;display:inline-block;border-radius:50%;margin-right:6px}}
+.assignable{{background:var(--green)}} .excluded{{background:var(--blue)}} .pending{{background:var(--amber)}} .missing{{background:#7b8790}} .hold{{background:var(--red)}} .legend{{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:.9rem}} .dot{{width:10px;height:10px;display:inline-block;border-radius:50%;margin-right:6px}}
 .bar-row{{display:grid;grid-template-columns:minmax(180px,280px) 1fr 40px;gap:12px;align-items:center;margin:10px 0}} .bar-label{{font-size:.92rem}} .bar-track{{height:12px;background:#e2e7e7;border-radius:10px;overflow:hidden}} .bar-track span{{display:block;height:100%;background:var(--blue)}} .bar-value{{font-variant-numeric:tabular-nums;text-align:right}}
 .callout{{border-left:5px solid var(--amber);background:var(--amber-soft);padding:18px 20px;margin:24px 0}} .callout.danger{{border-color:var(--red);background:var(--red-soft)}}
 .table-wrap{{overflow:auto;border:1px solid var(--line);background:white}} table{{width:100%;border-collapse:collapse;font-size:.9rem}} th,td{{padding:11px 13px;border-bottom:1px solid #e2e7e7;text-align:left;vertical-align:top}} th{{position:sticky;top:0;background:#edf1f1;color:#39494f;font-weight:650}} td.num{{text-align:right;font-variant-numeric:tabular-nums}} td small{{display:block;color:var(--muted);max-width:52ch;margin-top:3px}} a{{color:#244e80;text-decoration-thickness:1px;text-underline-offset:2px}}
@@ -432,17 +440,17 @@ p{{max-width:76ch}} .meta{{color:var(--muted);font-size:.88rem}} .lede{{font-fam
 
 <section><h2>Two populations, two purposes</h2><p>The counts should not be compared as if one were a subset of the other. The {total_excluded} is a current screening-state count; the {exceptions} is a historical-cohort audit. Their exact relationship is:</p>
 <div class="sets"><div class="set"><strong>{exclusion_only}</strong>in the {total_excluded} only<small>Currently matched and excluded, never accepted into the assigned cohort.</small></div><div class="set overlap"><strong>{matched_later}</strong>in both groups<small>Assigned, still a FLoRA match, and now excluded.</small></div><div class="set"><strong>{decision_only}</strong>in the {exceptions} only<small>Historical assignments whose current state changed for another reason, including {no_longer_match_and_excluded} excluded records that are no longer FLoRA-eligible.</small></div></div>
-<div class="callout"><h3>Where choices are required</h3><p>Review all {exceptions} historical exceptions below. Resolve the missing record and pending validations first; then adjudicate the {later} explicit post-assignment exclusions and document how changed eligibility affects the remaining assigned records.</p></div></section>
+<div class="callout"><h3>Where choices are required</h3><p>Review all {exceptions} historical exceptions below. Resolve manual holds and pending validations first; then adjudicate the {later} explicit post-assignment exclusions and document how changed eligibility affects the remaining assigned records.</p></div></section>
 
 <section><h2>How {current_total:,} current matches reconcile</h2><p>The dashboard now uses mutually exclusive states. This prevents contactless records that were already excluded from being subtracted twice.</p>
-<div class="reconcile"><span class="assignable" style="width:{current['assignable']/current_total*100:.2f}%">{current['assignable']:,} assignable</span><span class="excluded" style="width:{current['excluded']/current_total*100:.2f}%">{current['excluded']:,} excluded</span><span class="pending" style="width:{current['validation_pending']/current_total*100:.2f}%" title="{current['validation_pending']} pending"></span></div>
-<div class="legend"><span><i class="dot assignable"></i>Currently assignable: {current['assignable']:,}</span><span><i class="dot excluded"></i>Excluded: {current['excluded']:,}</span><span><i class="dot pending"></i>Pending validation: {current['validation_pending']:,}</span><span>Active without contact: {current['missing_email']:,}</span></div></section>
+<div class="reconcile"><span class="assignable" style="width:{current['assignable']/current_total*100:.2f}%">{current['assignable']:,} assignable</span><span class="excluded" style="width:{current['excluded']/current_total*100:.2f}%">{current['excluded']:,} excluded</span><span class="missing" style="width:{current['missing_email']/current_total*100:.2f}%" title="{current['missing_email']} without contact"></span><span class="pending" style="width:{current['validation_pending']/current_total*100:.2f}%" title="{current['validation_pending']} pending"></span><span class="hold" style="width:{current['manual_review_hold']/current_total*100:.2f}%" title="{current['manual_review_hold']} on manual hold"></span></div>
+<div class="legend"><span><i class="dot assignable"></i>Currently assignable: {current['assignable']:,}</span><span><i class="dot excluded"></i>Excluded: {current['excluded']:,}</span><span><i class="dot missing"></i>Active without contact: {current['missing_email']:,}</span><span><i class="dot pending"></i>Pending validation: {current['validation_pending']:,}</span><span><i class="dot hold"></i>Manual review hold: {current['manual_review_hold']:,}</span></div></section>
 
 <section><h2>Screening audit: why the {total_excluded} were excluded</h2><p>This section validates pipeline screening; it is not the main decision list. Version control, absent contacts, the registered date window, and the cross-arm safeguard account for {routine_exclusions} of {total_excluded} exclusions. {substantive_exclusions} followed substantive post-processing review.</p>{_bar_rows(audit['reason_counts'], total_excluded)}</section>
 
 <section><h2>Integrity checks</h2><div class="table-wrap"><table><thead><tr><th>Result</th><th>Check</th><th>Observed</th></tr></thead><tbody>{_check_rows(audit['checks'])}</tbody></table></div></section>
 
-<section><h2>Decision register: all {exceptions} changed assignments</h2><p>{audit['total_assigned']:,} preprints were historically assigned. Of these, {audit['currently_assignable_assigned']:,} remain currently assignable and {exceptions} do not. The {exceptions} explain the difference between 1,777 historical assignments and 1,729 current assignable records.</p>
+<section><h2>Decision register: all {exceptions} changed assignments</h2><p>{audit['total_assigned']:,} preprints were historically assigned. Of these, {audit['currently_assignable_assigned']:,} remain currently assignable and {exceptions} do not. The {exceptions} explain the difference between {audit['total_assigned']:,} historical assignments and {audit['currently_assignable_assigned']:,} current assignable records.</p>
 <div class="callout"><h3>These are cohort decisions, not unassigned cases</h3><p>{'; '.join(f'{count} {_escape(state).lower()}' for state,count in audit['assigned_exception_states'].most_common())}. Historical assignment remains in the audit trail; the decision is how each changed record is handled in analysis and reporting.</p></div>
 <p><strong>Protocol anchor.</strong> The primary analysis is intention-to-treat among randomised, eligible, contactable preprints. The protocol separately specifies exclusion of withdrawn or removed preprints at follow-up and postprints identified during outcome collection. Each changed record therefore needs an explicit, documented mapping to a prespecified rule; it should not disappear from the cohort solely because its current database state changed.</p>
 <div class="table-wrap"><table><thead><tr><th>Preprint</th><th>Arm</th><th>Current state</th><th>Reason if excluded</th><th>Decision needed</th><th>Email archive</th><th>Assigned</th><th>Excluded</th></tr></thead><tbody>{_exception_rows(audit['assigned_exceptions'])}</tbody></table></div></section>
@@ -450,7 +458,7 @@ p{{max-width:76ch}} .meta{{color:var(--muted);font-size:.88rem}} .lede{{font-fam
 <section><h2>Case review: accepted assignments later excluded</h2><p>These {later} records are the subset that warrants substantive review: {_escape(later_reason_text)}. {matched_later} remain marked as FLoRA matches; {later-matched_later} are no longer FLoRA-eligible. {verified_later} records have a verified sent email, while {not_sent_later} were not emailed.</p>
 <div class="table-wrap"><table><thead><tr><th>Preprint</th><th>Arm</th><th>Current state</th><th>Reason</th><th>Decision needed</th><th>Email archive</th><th>Assigned</th><th>Excluded</th></tr></thead><tbody>{_exception_rows(audit['assigned_later_excluded'])}</tbody></table></div></section>
 
-<section><h2>Operational audit: sent-state anomalies</h2><p>These {len(audit['sent_state_anomalies'])} records are separate from the 48-record cohort decision set unless their eligibility state also changed. DynamoDB marks them as sent, but no corresponding Gmail message exists. They should not be counted as delivered or re-sent without resolving the duplicated Message-ID history.</p>
+<section><h2>Operational audit: sent-state anomalies</h2><p>These {len(audit['sent_state_anomalies'])} records are separate from the {exceptions}-record cohort decision set unless their eligibility state also changed. DynamoDB marks them as sent, but no corresponding Gmail message exists. They should not be counted as delivered or re-sent without resolving the duplicated Message-ID history.</p>
 <div class="table-wrap"><table><thead><tr><th>Preprint</th><th>Arm</th><th>Current state</th><th>Reason</th><th>Action needed</th><th>Email archive</th><th>Assigned</th><th>Excluded</th></tr></thead><tbody>{_exception_rows(audit['sent_state_anomalies'])}</tbody></table></div></section>
 
 <details><summary>Inspect all {total_excluded} matched-but-excluded records</summary><div class="filters"><select id="reason"><option value="">All reasons</option>{reason_options}</select><select id="state"><option value="">All timing states</option><option>Later exclusion</option><option>Before accepted assignment</option></select><input id="search" type="search" placeholder="Search public OSF ID or title"></div>

@@ -94,6 +94,7 @@ def write_extraction(
     *,
     raise_on_error: bool = False,
     log: Optional[logging.Logger] = None,
+    allow_protected_overwrite: bool = False,
 ) -> Dict[str, int | str | bool]:
 
     _log = log or logger
@@ -107,6 +108,25 @@ def write_extraction(
     p_published_date = _safe_str(preprint.get("published_date"))
 
     repo = PreprintsRepo()
+
+    # Reference rows are part of the randomized baseline once a preprint has
+    # been assigned (and certainly once an email has been sent).  Replacing
+    # them with batch_writer.put_item would discard downstream FLoRA and
+    # citation-validation fields.  A deliberate repair can opt out, but the
+    # routine pipeline must treat these rows as immutable.
+    if not allow_protected_overwrite:
+        state = repo.t_preprints.get_item(
+            Key={"osf_id": osf_id},
+            ProjectionExpression="trial_assignment_status, email_sent",
+            ConsistentRead=True,
+        ).get("Item") or {}
+        if state.get("trial_assignment_status") or state.get("email_sent") is True:
+            result["skipped_protected"] = True
+            _log.warning(
+                "Skipping TEI/reference overwrite for protected preprint",
+                extra={"osf_id": osf_id},
+            )
+            return result
 
     try:
         # TEI summary upsert

@@ -19,6 +19,16 @@ class ExclusionAuditTests(unittest.TestCase):
             audit._current_state({"flora_eligible": True, "author_email_candidates": []}),
             "No contactable author",
         )
+        self.assertEqual(
+            audit._current_state(
+                {
+                    "flora_eligible": True,
+                    "manual_review_hold": True,
+                    "author_email_candidates": [],
+                }
+            ),
+            "Manual review hold",
+        )
 
     def test_decision_guidance_prioritizes_emailed_exclusions(self) -> None:
         priority, decision = audit._decision_guidance(
@@ -76,7 +86,13 @@ class ExclusionAuditTests(unittest.TestCase):
                 "currently_assignable_assigned": 1,
                 "randomisation_excluded": 0,
                 "current_match_states": Counter(
-                    {"assignable": 1, "excluded": 3, "validation_pending": 0, "missing_email": 0}
+                    {
+                        "assignable": 1,
+                        "excluded": 3,
+                        "validation_pending": 0,
+                        "missing_email": 0,
+                        "manual_review_hold": 0,
+                    }
                 ),
                 "current_match_total": 4,
             }

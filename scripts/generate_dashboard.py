@@ -428,7 +428,7 @@ def collect_stats():
         preprints,
         Attr("flora_eligible").eq(True),
         "osf_id, flora_eligible_count, flora_citation_validation_pending, "
-        "author_email_candidates, trial_assignment_status, excluded",
+        "author_email_candidates, trial_assignment_status, trial_arm, excluded, manual_review_hold",
     )
     flora_total = len(flora_eligible_items)
 
@@ -448,6 +448,8 @@ def collect_stats():
     for item in flora_eligible_items:
         if item.get("excluded") is True:
             flora_current["excluded"] += 1
+        elif item.get("manual_review_hold") is True:
+            flora_current["manual_review_hold"] += 1
         elif not item.get("author_email_candidates"):
             flora_current["missing_email"] += 1
         elif item.get("flora_citation_validation_pending") is True:
@@ -458,12 +460,14 @@ def collect_stats():
     flora_excluded = flora_current["excluded"]
     flora_missing_email = flora_current["missing_email"]
     flora_validation_pending = flora_current["validation_pending"]
+    flora_manual_review_hold = flora_current["manual_review_hold"]
     flora_total_assignable = flora_current["assignable"]
     flora_currently_assigned = sum(
         1 for item in flora_eligible_items
         if not item.get("excluded")
         and item.get("author_email_candidates")
         and not item.get("flora_citation_validation_pending")
+        and not item.get("manual_review_hold")
         and item.get("trial_assignment_status") == "assigned"
     )
     assigned_not_currently_assignable = max(0, total_assigned - flora_currently_assigned)
@@ -475,6 +479,7 @@ def collect_stats():
         and not item.get("excluded")
         and item.get("author_email_candidates")
         and not item.get("flora_citation_validation_pending")
+        and not item.get("manual_review_hold")
     )
 
     queue_extract_done = funnel["queue_extract"]["done"]
@@ -518,6 +523,12 @@ def collect_stats():
         "flora_multi_ref": flora_multi_ref,
         "flora_multi_ref_pct": flora_multi_ref_pct,
         "flora_validation_pending": flora_validation_pending,
+        "flora_manual_review_hold": flora_manual_review_hold,
+        "flora_treatment_manual_holds": sum(
+            1 for item in flora_eligible_items
+            if item.get("trial_arm") == "treatment"
+            and item.get("manual_review_hold") is True
+        ),
         "flora_excluded": flora_excluded,
         "flora_missing_email": flora_missing_email,
         "flora_total_assignable": flora_total_assignable,
@@ -588,7 +599,10 @@ def render_markdown(stats):
     treatment = stats["treatment_assigned"]
     control = stats["arm_counts"].get("control", 0)
     email_in_queue = email["pending"] + sent
-    missing_from_queue = max(0, treatment - email_in_queue)
+    missing_from_queue = max(
+        0,
+        treatment - email_in_queue - stats["flora_treatment_manual_holds"],
+    )
     treatment_contactable = stats["contactable_by_arm"].get("treatment", 0)
     control_contactable = stats["contactable_by_arm"].get("control", 0)
     balance = treatment - control
@@ -625,6 +639,14 @@ def render_markdown(stats):
             f"> **{missing_from_queue} treatment preprint{' is' if missing_from_queue == 1 else 's are'} "
             "neither archive-verified as sent nor pending in the email queue.** "
             "Review sent-state anomalies before re-queuing.",
+        ])
+
+    if stats["flora_treatment_manual_holds"]:
+        lines.extend([
+            "",
+            "> [!NOTE]  ",
+            f"> **{stats['flora_treatment_manual_holds']:,} assigned treatment record is on a manual-review hold** "
+            "and is intentionally absent from the email queue.",
         ])
 
     if stats["email_snapshot_missing"]:
@@ -779,6 +801,7 @@ def render_markdown(stats):
         f"| − Excluded from the active pipeline | {stats['flora_excluded']:,} |",
         f"| − Active without a contactable author | {stats['flora_missing_email']:,} |",
         f"| − Active, pending citation confirmation | {stats['flora_validation_pending']:,} |",
+        f"| − Active, held for manual review | {stats['flora_manual_review_hold']:,} |",
         f"| = Currently assignable | **{stats['flora_total_assignable']:,}** |",
         "",
         f"**Historical assignments:** {stats['total_assigned']:,} = "

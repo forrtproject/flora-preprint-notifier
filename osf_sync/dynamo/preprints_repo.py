@@ -1565,6 +1565,8 @@ class PreprintsRepo:
                     " AND (attribute_not_exists(excluded) OR excluded = :false)"
                     " AND (attribute_not_exists(flora_citation_validation_pending)"
                     "      OR flora_citation_validation_pending = :false)"
+                    " AND (attribute_not_exists(manual_review_hold)"
+                    "      OR manual_review_hold = :false)"
                 ),
                 "ExpressionAttributeValues": {
                     ":q": "pending",
@@ -1594,6 +1596,7 @@ class PreprintsRepo:
                 ConditionExpression=(
                     "queue_email = :pending "
                     "AND (attribute_not_exists(email_sent) OR email_sent = :false) "
+                    "AND (attribute_not_exists(manual_review_hold) OR manual_review_hold = :false) "
                     "AND (attribute_not_exists(claim_email_until) OR claim_email_until < :now OR claim_email_owner = :owner)"
                 ),
                 UpdateExpression="SET claim_email_owner=:owner, claim_email_until=:until, updated_at=:now",
@@ -1635,9 +1638,15 @@ class PreprintsRepo:
                 Key={"osf_id": osf_id},
                 UpdateExpression="SET queue_email=:pending, updated_at=:t",
                 ConditionExpression=(
-                    "attribute_not_exists(queue_email) OR queue_email <> :done"
+                    "(attribute_not_exists(queue_email) OR queue_email <> :done) "
+                    "AND (attribute_not_exists(manual_review_hold) OR manual_review_hold = :false)"
                 ),
-                ExpressionAttributeValues={":pending": "pending", ":t": now, ":done": "done"},
+                ExpressionAttributeValues={
+                    ":pending": "pending",
+                    ":t": now,
+                    ":done": "done",
+                    ":false": False,
+                },
             )
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":

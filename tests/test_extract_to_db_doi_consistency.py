@@ -32,12 +32,21 @@ class _DummyTable:
         return _DummyBatchWriter(self.items)
 
 
+class _DummyPreprintsTable:
+    def __init__(self, item=None):
+        self.item = item or {}
+
+    def get_item(self, **kwargs):
+        return {"Item": self.item} if self.item else {}
+
+
 class _DummyRepo:
     def __init__(self) -> None:
         self.tei = []
         self.refs = []
         self.extracted = []
         self.t_refs = _DummyTable()
+        self.t_preprints = _DummyPreprintsTable()
 
     def upsert_tei(self, osf_id, preprint):
         self.tei.append((osf_id, preprint))
@@ -52,6 +61,31 @@ class _DummyRepo:
 
 
 class ExtractToDbDoiConsistencyTests(unittest.TestCase):
+    def test_write_extraction_does_not_replace_assigned_references(self) -> None:
+        repo = _DummyRepo()
+        repo.t_preprints = _DummyPreprintsTable({"trial_assignment_status": "assigned"})
+        with patch("osf_sync.augmentation.extract_to_db.PreprintsRepo", return_value=repo):
+            out = write_extraction("protected_v1", {"title": "t"}, [{"ref_id": "b1"}])
+        self.assertTrue(out["skipped_protected"])
+        self.assertEqual(repo.tei, [])
+        self.assertEqual(repo.t_refs.items, [])
+
+    def test_write_extraction_can_explicitly_rebuild_protected_record(self) -> None:
+        repo = _DummyRepo()
+        repo.t_preprints = _DummyPreprintsTable({"email_sent": True})
+        with (
+            patch("osf_sync.augmentation.extract_to_db.PreprintsRepo", return_value=repo),
+            patch("osf_sync.augmentation.extract_to_db.doi_resolves", return_value=True),
+        ):
+            out = write_extraction(
+                "protected_v1",
+                {"title": "t"},
+                [{"ref_id": "b1", "doi": "10.1111/abcd.1234567"}],
+                allow_protected_overwrite=True,
+            )
+        self.assertNotIn("skipped_protected", out)
+        self.assertEqual(out["refs_upserted"], 1)
+
     def test_extract_unique_doi_from_raw_citation(self) -> None:
         raw = (
             "Condon, P., & Makransky, J. (2020). ... "

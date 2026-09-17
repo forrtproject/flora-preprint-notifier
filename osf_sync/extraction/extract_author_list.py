@@ -1653,6 +1653,19 @@ def _count_contactable_candidates(candidates: List[Dict[str, Any]]) -> int:
     return count
 
 
+def _can_exclude_for_no_author_contacts(item: Dict[str, Any]) -> bool:
+    """Only pre-randomization records may be excluded for current contact state.
+
+    Suppressions and bounces can make a previously usable address disappear on
+    a later extraction.  That must not rewrite the eligibility history of a
+    record that has already been assigned or emailed.
+    """
+    return not (
+        item.get("trial_assignment_status")
+        or item.get("email_sent") is True
+    )
+
+
 def _match_emails_in_csv(path: str, threshold: float) -> None:
     in_path = Path(path)
     tmp_path = in_path.with_suffix(in_path.suffix + ".tmp")
@@ -1838,7 +1851,10 @@ def run_author_extract(
                 repo=repo,
                 enforce_contactability=True,
             )
-            if _count_contactable_candidates(candidates) == 0:
+            if (
+                _count_contactable_candidates(candidates) == 0
+                and _can_exclude_for_no_author_contacts(item)
+            ):
                 # Collect emails that were present in the rows for diagnostics.
                 all_row_emails = []
                 for row in rows:
@@ -1872,7 +1888,7 @@ def run_author_extract(
                 for row in rows:
                     writer.writerow(_row_for_csv(row))
             count_rows += len(rows)
-        else:
+        elif _can_exclude_for_no_author_contacts(item):
             log_preprint_exclusion(
                 reason="no_author_contacts_extracted",
                 osf_id=osf_id,
