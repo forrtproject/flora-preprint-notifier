@@ -1,5 +1,7 @@
 # OSF Preprints - Modular Pipeline (No Celery)
 
+> **Experiment status:** The experimental phase ended on 17 September 2026. Scheduled production GitHub Actions are paused. Workflows remain available for explicit manual maintenance only; do not resume notification sending without authorization for a new phase.
+
 This repository runs a bounded, stage-based pipeline for OSF preprints using DynamoDB as the single source of truth.
 
 Pipeline stages:
@@ -177,7 +179,9 @@ csv_path = "data/flora.csv"
 
 ## Scheduling
 
-Use either:
+The production GitHub Actions schedules are paused because the experimental phase has ended. The workflows can still be started manually for authorized maintenance.
+
+For a future phase, scheduling can use either:
 - Cron/systemd timers on a VM, or
 - GitHub Actions `schedule` workflows.
 

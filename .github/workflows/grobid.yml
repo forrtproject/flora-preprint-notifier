@@ -1,8 +1,6 @@
 name: GROBID Processing
 
 on:
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       limit:
