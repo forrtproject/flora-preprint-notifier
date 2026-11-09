@@ -14,7 +14,7 @@ Pipeline stages:
 7. `author`: author/email candidate extraction
 
 All stages run as normal Python commands and exit. Scheduling is external (cron or GitHub Actions).
-The `flora` stage checks whether originals have replications cited in the FLoRA database (the FORRT Library of Replication Attempts).
+The `flora` stage checks whether originals have replications cited in the FLoRA database (the FORRT Library of Reproduction and Replication Attempts).
 
 See the [trial flowchart](docs/protocol_flowchart.md) for a visual overview of how a preprint flows through the pipeline.
 

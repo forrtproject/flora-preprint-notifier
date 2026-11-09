@@ -2,7 +2,7 @@ Subject: {{ 'A replication attempt' if total_replication_count == 1 else 'Replic
 
 {{ author_greeting }}
 
-Thank you for sharing *{{ preprint_title }}* openly on {{ server_name }}. Our automated system identified {{ 'a replication attempt for one of the studies' if total_replication_count == 1 else 'replication attempts for some of the studies' }} cited in your preprint in the Library of Replication Attempts (FLoRA).
+Thank you for sharing *{{ preprint_title }}* openly on {{ server_name }}. Our automated system identified {{ 'a replication attempt for one of the studies' if total_replication_count == 1 else 'replication attempts for some of the studies' }} cited in your preprint in the FORRT Library of Reproduction and Replication Attempts (FLoRA).
 
 We are part of the FORRT team maintaining FLoRA, a community-driven database that links replication attempts to the studies they examine. Because replication attempts are not consistently connected to original studies in common databases, we are sharing replication evidence identified from the references in your preprint{% if some_replications_cited %}, which you might find relevant in addition to the {{ 'replication' if cited_replication_count == 1 else 'replications' }} you are already citing{% endif %}.
 
