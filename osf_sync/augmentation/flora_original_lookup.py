@@ -156,6 +156,13 @@ def _load_flora_pairs_by_original(path: Path) -> Dict[str, List[Dict[str, Option
             return _clean_text(row.get(field_map.get(key, key)))
 
         for row in reader:
+            # FLoRA contains both replication and reproduction records.  This
+            # intervention is specifically about notifying authors of
+            # replications, so fail closed when the upstream type is absent or
+            # has any other value.
+            study_type = (_row_value(row, "type") or "").lower()
+            if study_type != "replication":
+                continue
             doi_o = normalize_doi(_row_value(row, "doi_o"))
             if not doi_o:
                 continue
